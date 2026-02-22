@@ -9,7 +9,7 @@ jobs:
       image: ghcr.io/espressif/esp-matter:latest 
     steps:
       - name: Descargar el código
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4  # <-- Cambiado a v4
 
       - name: Compilar con ESP-IDF y Matter
         run: |
@@ -19,7 +19,7 @@ jobs:
           idf.py build
 
       - name: Guardar los archivos compilados
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4  # <-- Cambiado a v4
         with:
           name: Firmware_Listo
           path: |
