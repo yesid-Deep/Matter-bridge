@@ -1,4 +1,4 @@
-name: Compilar Border Router Matter
+name: FIRMWARE SENSOR H2
 
 on: [push] 
 
@@ -6,22 +6,36 @@ jobs:
   build:
     runs-on: ubuntu-latest
     container:
-      image: espressif/esp-matter:latest  # <-- ¡Corregido! Sin el ghcr.io/
+      image: espressif/esp-matter:latest 
+    # Encendemos el caché en el entorno de Espressif
+    env:
+      IDF_CCACHE_ENABLE: 1
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      
     steps:
       - name: Descargar el código
         uses: actions/checkout@v4
 
-      - name: Compilar con ESP-IDF y Matter
+      # --- LA MAGIA DEL CACHÉ ---
+      - name: Recuperar/Guardar Caché de Compilación
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-matter-${{ github.sha }}
+          restore-keys: |
+            ccache-matter-
+
+      - name: Compilar EXCLUSIVAMENTE para H2
         run: |
           . /opt/espressif/esp-idf/export.sh
           . /opt/espressif/esp-matter/export.sh
-          idf.py set-target esp32c6
+          idf.py set-target esp32h2
           idf.py build
 
-      - name: Guardar los archivos compilados
+      - name: Guardar el Firmware
         uses: actions/upload-artifact@v4
         with:
-          name: Firmware_Listo
+          name: Firmware_Sensor_H2
           path: |
             build/*.bin
             build/bootloader/*.bin
