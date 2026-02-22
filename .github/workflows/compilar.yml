@@ -15,7 +15,7 @@ jobs:
         run: |
           . /opt/espressif/esp-idf/export.sh
           . /opt/espressif/esp-matter/export.sh
-          idf.py set-target esp32
+          idf.py set-target esp32c6
           idf.py build
 
       - name: Guardar los archivos compilados
