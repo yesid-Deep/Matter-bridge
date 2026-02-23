@@ -5,7 +5,11 @@
 #include <esp_err.h>
 #include <esp_log.h>
 #include <esp_timer.h>
-#include "sht3x.h" // Asegúrate de tener el sht3x.h que creamos antes
+#include "sht3x.h" 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+
 
 static const char *TAG = "sht3x";
 
