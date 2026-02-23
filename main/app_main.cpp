@@ -20,7 +20,10 @@
 #include <common_macros.h>
 
 // drivers implemented by this example
-#include <drivers/shtc3.h>
+#include "driver/i2c_master.h" // Nuevo driver I2C
+#include "driver/gpio.h"       // Para definir los pines GPIO
+
+#include <drivers/sht3x.h>
 #include <drivers/pir.h>
 
 static const char *TAG = "app_main";
@@ -67,6 +70,7 @@ static void humidity_sensor_notification(uint16_t endpoint_id, float humidity, v
         attribute::update(endpoint_id, RelativeHumidityMeasurement::Id, RelativeHumidityMeasurement::Attributes::MeasuredValue::Id, &val);
     });
 }
+/*
 
 static void occupancy_sensor_notification(uint16_t endpoint_id, bool occupancy, void *user_data)
 {
@@ -83,6 +87,7 @@ static void occupancy_sensor_notification(uint16_t endpoint_id, bool occupancy, 
         attribute::update(endpoint_id, OccupancySensing::Id, OccupancySensing::Attributes::Occupancy::Id, &val);
     });
 }
+*/
 
 static esp_err_t factory_reset_button_register()
 {
@@ -153,6 +158,34 @@ static esp_err_t app_attribute_update_cb(attribute::callback_type_t type, uint16
     return ESP_OK;
 }
 
+
+struct DummySensorCtx {
+    uint16_t temp_endpoint_id;
+    uint16_t hum_endpoint_id;
+};
+
+static DummySensorCtx dummy_ctx;
+
+static void dummy_sensor_timer_cb(void *arg) {
+    DummySensorCtx *ctx = (DummySensorCtx *)arg;
+    
+    // esp_random() genera un número muy grande. Lo reducimos para que tenga sentido.
+    // Temperatura simulada entre 20.0°C y 30.0°C
+    float temp = 20.0f + (static_cast<float>(esp_random() % 1000) / 100.0f); 
+    
+    // Humedad simulada entre 40.0% y 60.0%
+    float hum = 40.0f + (static_cast<float>(esp_random() % 2000) / 100.0f);
+
+    // Enviar los datos simulados a los endpoints de Matter
+    temp_sensor_notification(ctx->temp_endpoint_id, temp, NULL);
+    humidity_sensor_notification(ctx->hum_endpoint_id, hum, NULL);
+    
+    ESP_LOGI(TAG, "Sensor SIMULADO -> Temp: %.2f °C, Hum: %.2f %%", temp, hum);
+}
+
+
+
+
 extern "C" void app_main()
 {
     /* Initialize the ESP NVS layer */
@@ -166,7 +199,73 @@ extern "C" void app_main()
     node::config_t node_config;
     node_t *node = node::create(&node_config, app_attribute_update_cb, app_identification_cb);
     ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "Failed to create Matter node"));
+    
+    
+    // add temperature sensor device
+    temperature_sensor::config_t temp_sensor_config;
+    endpoint_t * temp_sensor_ep = temperature_sensor::create(node, &temp_sensor_config, ENDPOINT_FLAG_NONE, NULL);
+    ABORT_APP_ON_FAILURE(temp_sensor_ep != nullptr, ESP_LOGE(TAG, "Failed to create temperature_sensor endpoint"));
 
+    // add the humidity sensor device
+    humidity_sensor::config_t humidity_sensor_config;
+    endpoint_t * humidity_sensor_ep = humidity_sensor::create(node, &humidity_sensor_config, ENDPOINT_FLAG_NONE, NULL);
+    ABORT_APP_ON_FAILURE(humidity_sensor_ep != nullptr, ESP_LOGE(TAG, "Failed to create humidity_sensor endpoint"));
+
+    // --- 1. INICIALIZACIÓN DEL BUS I2C (NUEVO DRIVER) ---
+    i2c_master_bus_config_t i2c_bus_config = {};
+    i2c_bus_config.clk_source = I2C_CLK_SRC_DEFAULT;
+    i2c_bus_config.i2c_port = I2C_NUM_0;
+    i2c_bus_config.scl_io_num = GPIO_NUM_4; // Tu pin SCL
+    i2c_bus_config.sda_io_num = GPIO_NUM_3; // Tu pin SDA
+    i2c_bus_config.glitch_ignore_cnt = 7;
+    i2c_bus_config.flags.enable_internal_pullup = true;
+
+    i2c_master_bus_handle_t bus_handle;
+    err = i2c_new_master_bus(&i2c_bus_config, &bus_handle);
+    ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to initialize I2C master bus"));
+
+    // --- 2. INICIALIZACIÓN DEL SENSOR SHT3X ---
+    static sht3x_sensor_config_t sht3x_config = {
+        .temperature = {
+            .cb = temp_sensor_notification,
+            .endpoint_id = endpoint::get_id(temp_sensor_ep),
+        },
+        .humidity = {
+            .cb = humidity_sensor_notification,
+            .endpoint_id = endpoint::get_id(humidity_sensor_ep),
+        },
+        .i2c_bus = bus_handle, // Le pasamos el bus I2C que acabamos de crear
+        .i2c_addr = 0x44,      // Dirección por defecto del SHT3x
+        .user_data = NULL,
+        .interval_ms = 5000    // Lee cada 5 segundos
+    };
+    
+    err = sht3x_sensor_init(&sht3x_config);
+    //ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to initialize SHT3x sensor driver"));
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "¡Fallo al inicializar el SHT3x real! (Err: %d). Iniciando modo SIMULADO...", err);
+        
+        // Guardamos los IDs de Matter para que el timer sepa a dónde enviar los datos
+        dummy_ctx.temp_endpoint_id = endpoint::get_id(temp_sensor_ep);
+        dummy_ctx.hum_endpoint_id = endpoint::get_id(humidity_sensor_ep);
+
+        // Creamos un temporizador de ESP-IDF para el sensor simulado
+        esp_timer_create_args_t args = {};
+        args.callback = dummy_sensor_timer_cb;
+        args.arg = &dummy_ctx;
+        
+        esp_timer_handle_t dummy_timer;
+        esp_timer_create(&args, &dummy_timer);
+        
+        // Lo iniciamos para que se ejecute cada 5 segundos (5,000,000 microsegundos)
+        esp_timer_start_periodic(dummy_timer, 5000000);
+    } else {
+        ESP_LOGI(TAG, "Sensor SHT3x real inicializado y funcionando correctamente.");
+    }
+    
+    
+    
+    /*
     // add temperature sensor device
     temperature_sensor::config_t temp_sensor_config;
     endpoint_t * temp_sensor_ep = temperature_sensor::create(node, &temp_sensor_config, ENDPOINT_FLAG_NONE, NULL);
@@ -190,25 +289,31 @@ extern "C" void app_main()
     };
     err = shtc3_sensor_init(&shtc3_config);
     ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to initialize temperature sensor driver"));
-
+    
+    
+    
+    
     // add the occupancy sensor
     occupancy_sensor::config_t occupancy_sensor_config;
     occupancy_sensor_config.occupancy_sensing.occupancy_sensor_type =
         chip::to_underlying(OccupancySensing::OccupancySensorTypeEnum::kPir);
     occupancy_sensor_config.occupancy_sensing.occupancy_sensor_type_bitmap =
         chip::to_underlying(OccupancySensing::OccupancySensorTypeBitmap::kPir);
-
+    /*
     endpoint_t * occupancy_sensor_ep = occupancy_sensor::create(node, &occupancy_sensor_config, ENDPOINT_FLAG_NONE, NULL);
     ABORT_APP_ON_FAILURE(occupancy_sensor_ep != nullptr, ESP_LOGE(TAG, "Failed to create occupancy_sensor endpoint"));
 
     // initialize occupancy sensor driver (pir)
+
+
+    
     static pir_sensor_config_t pir_config = {
         .cb = occupancy_sensor_notification,
         .endpoint_id = endpoint::get_id(occupancy_sensor_ep),
     };
     err = pir_sensor_init(&pir_config);
     ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to initialize occupancy sensor driver"));
-
+   */      
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
     /* Set OpenThread platform config */
     esp_openthread_platform_config_t config = {
